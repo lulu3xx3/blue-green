@@ -1,0 +1,66 @@
+name: Blue-Green Deployment
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::008087132755:role/github-cicd-role
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Determine active target group
+        id: tg
+        run: |
+          CURRENT_TG=$(aws elbv2 describe-listeners             --listener-arns ${{ secrets.ALB_LISTENER_ARN }}             --query "Listeners[0].DefaultActions[0].TargetGroupArn"             --output text)
+
+          if [ "$CURRENT_TG" == "${{ secrets.BLUE_TG_ARN }}" ]; then
+            echo "deploy_env=green" >> $GITHUB_OUTPUT
+          else
+            echo "deploy_env=blue" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Set target instance
+        id: instance
+        run: |
+          if [ "${{ steps.tg.outputs.deploy_env }}" == "green" ]; then
+            echo "TARGET_IP=${{ secrets.GREEN_INSTANCE_IP }}" >> $GITHUB_OUTPUT
+            echo "TARGET_TG=${{ secrets.GREEN_TG_ARN }}" >> $GITHUB_OUTPUT
+          else
+            echo "TARGET_IP=${{ secrets.BLUE_INSTANCE_IP }}" >> $GITHUB_OUTPUT
+            echo "TARGET_TG=${{ secrets.BLUE_TG_ARN }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Deploy to target EC2
+        run: |
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > key.pem
+          chmod 600 key.pem
+
+          ssh -o StrictHostKeyChecking=no -i key.pem ubuntu@${{ steps.instance.outputs.TARGET_IP }} << 'EOF'
+            echo "Deployed at $(date)" | sudo tee /var/www/html/index.html
+            sudo systemctl restart nginx
+          EOF
+
+      - name: Wait for health check
+        run: sleep 30
+
+      - name: Switch traffic
+        run: |
+          aws elbv2 modify-listener             --listener-arn ${{ secrets.ALB_LISTENER_ARN }}             --default-actions Type=forward,TargetGroupArn=${{ steps.instance.outputs.TARGET_TG }}
+
+      - name: Done
+        run: echo "Deployment complete!"
