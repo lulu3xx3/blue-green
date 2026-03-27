@@ -20,7 +20,7 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::008087132755:role/github-cicd-role
+          role-to-assume: arn:aws:iam::008087132755:role/GitHub-BG-Role
           aws-region: ${{ secrets.AWS_REGION }}
 
       - name: Determine active target group
